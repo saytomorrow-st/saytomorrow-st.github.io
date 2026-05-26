@@ -421,12 +421,12 @@ namespace SayTomorrowUtility
                 return SystemColors.WindowText;
 
             string normalized = status.ToLowerInvariant();
-            if (normalized.Contains("выполнено"))
-                return Color.FromArgb(0, 120, 0);
-            if (normalized.Contains("ошибка") || normalized.Contains("нет ") || normalized.Contains("не "))
-                return Color.FromArgb(190, 30, 30);
             if (normalized.Contains("частично") || normalized.Contains("требуется") || normalized.Contains("пропущено"))
                 return Color.DarkOrange;
+            if (normalized.Contains("ошибка") || normalized.Contains("нет ") || normalized.Contains("не "))
+                return Color.FromArgb(190, 30, 30);
+            if (normalized.Contains("выполнено"))
+                return Color.FromArgb(0, 120, 0);
 
             return SystemColors.WindowText;
         }

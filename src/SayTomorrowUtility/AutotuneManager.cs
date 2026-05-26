@@ -172,8 +172,12 @@ namespace SayTomorrowUtility
             bool vc = RegistryKeyExists(@"SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64") || RegistryKeyExists(@"SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x86");
             bool xna = RegistryKeyExists(@"SOFTWARE\Microsoft\XNA\Framework\v4.0") || RegistryKeyExists(@"SOFTWARE\WOW6432Node\Microsoft\XNA\Framework\v4.0");
             bool openAl = File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "OpenAL32.dll"));
-            bool done = vc && xna && openAl;
-            return new AutotuneResult(done, done ? "Выполнено" : "Частично/не выполнено", "VC++: " + BoolText(vc) + "; XNA 4.0: " + BoolText(xna) + "; OpenAL: " + BoolText(openAl));
+            bool directX = File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "d3dx9_43.dll"))
+                || File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.SystemX86), "d3dx9_43.dll"));
+            bool dotNet40 = RegistryKeyExists(@"SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full")
+                || RegistryKeyExists(@"SOFTWARE\WOW6432Node\Microsoft\NET Framework Setup\NDP\v4\Full");
+            bool done = vc && xna && openAl && directX && dotNet40;
+            return new AutotuneResult(done, done ? "Выполнено" : "Частично/не выполнено", "DirectX: " + BoolText(directX) + "; .NET 4.x: " + BoolText(dotNet40) + "; VC++: " + BoolText(vc) + "; XNA 4.0: " + BoolText(xna) + "; OpenAL: " + BoolText(openAl));
         }
 
         private static AutotuneResult RunRedistsInstall()
