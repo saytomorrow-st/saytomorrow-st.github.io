@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -12,7 +13,13 @@ namespace SayTomorrowUtility
         private readonly Button defenderButton;
         private readonly Button refreshButton;
         private readonly ListView informationList;
+        private readonly DataGridView autotuneGrid;
+        private readonly Button runAllAutotuneButton;
+        private readonly Button refreshAutotuneButton;
+        private readonly List<AutotuneTaskDefinition> autotuneTasks;
+        private readonly Dictionary<string, DataGridViewRow> autotuneItems;
         private readonly Timer defenderTimer;
+        private bool autotuneRunning;
 
         public MainForm()
         {
@@ -20,6 +27,8 @@ namespace SayTomorrowUtility
             MinimumSize = new Size(920, 620);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9F);
+            autotuneTasks = AutotuneManager.CreateTasks();
+            autotuneItems = new Dictionary<string, DataGridViewRow>();
 
             Panel defenderPanel = new Panel
             {
@@ -88,7 +97,52 @@ namespace SayTomorrowUtility
 
             informationTab.Controls.Add(informationList);
             informationTab.Controls.Add(informationTop);
-            autotuneTab.Controls.Add(CreateEmptyTabLabel("Вкладка автонастройки пока пустая."));
+            Panel autotuneTop = new Panel { Dock = DockStyle.Top, Height = 70 };
+            Label autotuneHint = new Label
+            {
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Text = "Перед запуском каждая задача проверяет текущий статус. Автонастройка выполняет задачи сверху вниз."
+            };
+            runAllAutotuneButton = new Button
+            {
+                Dock = DockStyle.Right,
+                Width = 170,
+                Text = "Автонастройка"
+            };
+            runAllAutotuneButton.Click += async delegate { await RunAllAutotuneAsync(); };
+            refreshAutotuneButton = new Button
+            {
+                Dock = DockStyle.Right,
+                Width = 150,
+                Text = "Проверить"
+            };
+            refreshAutotuneButton.Click += async delegate { await RefreshAutotuneStatusesAsync(); };
+            autotuneTop.Controls.Add(autotuneHint);
+            autotuneTop.Controls.Add(refreshAutotuneButton);
+            autotuneTop.Controls.Add(runAllAutotuneButton);
+
+            autotuneGrid = new DataGridView
+            {
+                Dock = DockStyle.Fill,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                AllowUserToResizeRows = false,
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells,
+                BackgroundColor = SystemColors.Window,
+                BorderStyle = BorderStyle.Fixed3D,
+                ReadOnly = true,
+                RowHeadersVisible = false,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect
+            };
+            autotuneGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Task", HeaderText = "Задача", Width = 390 });
+            autotuneGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Статус", Width = 150 });
+            autotuneGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Details", HeaderText = "Детали", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
+            autotuneGrid.Columns.Add(new DataGridViewButtonColumn { Name = "Run", HeaderText = "Запуск", Text = "Запустить", UseColumnTextForButtonValue = true, Width = 105 });
+            autotuneGrid.CellContentClick += async delegate(object sender, DataGridViewCellEventArgs e) { await AutotuneGridCellContentClickAsync(e); };
+
+            autotuneTab.Controls.Add(autotuneGrid);
+            autotuneTab.Controls.Add(autotuneTop);
             diagnosticsTab.Controls.Add(CreateEmptyTabLabel("Вкладка диагностики пока пустая."));
 
             tabs.TabPages.Add(informationTab);
@@ -106,6 +160,8 @@ namespace SayTomorrowUtility
                 defenderTimer.Start();
                 await RefreshDefenderStatusAsync();
                 await LoadSystemInfoAsync();
+                BuildAutotuneList();
+                await RefreshAutotuneStatusesAsync();
             };
         }
 
@@ -193,6 +249,203 @@ namespace SayTomorrowUtility
                 FormatBool(status.RealTimeProtectionEnabled),
                 FormatBool(status.AntivirusEnabled),
                 FormatBool(status.ServiceEnabled));
+        }
+
+        private void BuildAutotuneList()
+        {
+            autotuneGrid.SuspendLayout();
+            try
+            {
+                autotuneGrid.Rows.Clear();
+                autotuneItems.Clear();
+                foreach (AutotuneTaskDefinition task in autotuneTasks)
+                {
+                    int rowIndex = autotuneGrid.Rows.Add(task.Title, "не проверено", "", "Запустить");
+                    DataGridViewRow row = autotuneGrid.Rows[rowIndex];
+                    row.Tag = task;
+                    autotuneItems.Add(task.Id, row);
+                }
+            }
+            finally
+            {
+                autotuneGrid.ResumeLayout();
+            }
+        }
+
+        private async Task RefreshAutotuneStatusesAsync()
+        {
+            if (!TryBeginAutotuneOperation())
+                return;
+
+            try
+            {
+                foreach (AutotuneTaskDefinition task in autotuneTasks)
+                {
+                    SetAutotuneStatus(task, "проверка...", "");
+                    AutotuneResult result = await Task.Run(delegate
+                    {
+                        try
+                        {
+                            return task.Check();
+                        }
+                        catch (Exception ex)
+                        {
+                            return new AutotuneResult(false, "Ошибка", ex.Message);
+                        }
+                    });
+                    SetAutotuneStatus(task, result.Status, result.Details);
+                }
+            }
+            finally
+            {
+                EndAutotuneOperation();
+            }
+        }
+
+        private async Task AutotuneGridCellContentClickAsync(DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || autotuneRunning)
+                return;
+
+            if (autotuneGrid.Columns[e.ColumnIndex].Name != "Run")
+                return;
+
+            AutotuneTaskDefinition task = autotuneGrid.Rows[e.RowIndex].Tag as AutotuneTaskDefinition;
+            if (task != null)
+                await RunSingleAutotuneTaskAsync(task);
+        }
+
+        private async Task RunAllAutotuneAsync()
+        {
+            if (!TryBeginAutotuneOperation())
+                return;
+
+            try
+            {
+                DefenderStatus defender = await Task.Run(delegate { return DefenderMonitor.Query(); });
+                if (defender.RealTimeProtectionEnabled == true)
+                {
+                    DialogResult answer = MessageBox.Show(
+                        "Защита в реальном времени Microsoft Defender включена. Некоторые silent-установщики из папки extra могут блокироваться. Временно отключить её можно кнопкой \"Перейти в Защитник Windows\".\n\nПродолжить автонастройку сейчас?",
+                        "Предупреждение",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+                    if (answer != DialogResult.Yes)
+                        return;
+                }
+
+                DialogResult confirm = MessageBox.Show(
+                    "Автонастройка запустит системные изменения от имени администратора: сеть, параметры Windows Update, silent-установщики, тему, обои и разметку только полностью пустых RAW-дисков.\n\nПродолжить?",
+                    "Автонастройка",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                if (confirm != DialogResult.Yes)
+                    return;
+
+                foreach (AutotuneTaskDefinition task in autotuneTasks)
+                    await RunAutotuneTaskCoreAsync(task, false);
+            }
+            finally
+            {
+                EndAutotuneOperation();
+            }
+        }
+
+        private async Task RunSingleAutotuneTaskAsync(AutotuneTaskDefinition task)
+        {
+            if (!TryBeginAutotuneOperation())
+                return;
+
+            try
+            {
+                if (task.Destructive)
+                {
+                    DialogResult confirm = MessageBox.Show(
+                        "Эта задача размечает только полностью пустые RAW-диски, но всё равно меняет накопители. Проверь, что подключены только нужные диски.\n\nЗапустить?",
+                        task.Title,
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+                    if (confirm != DialogResult.Yes)
+                        return;
+                }
+
+                await RunAutotuneTaskCoreAsync(task, true);
+            }
+            finally
+            {
+                EndAutotuneOperation();
+            }
+        }
+
+        private async Task RunAutotuneTaskCoreAsync(AutotuneTaskDefinition task, bool forceRun)
+        {
+            try
+            {
+                SetAutotuneStatus(task, "проверка...", "");
+                AutotuneResult check = await Task.Run(delegate { return task.Check(); });
+                if (check.Done && !forceRun)
+                {
+                    SetAutotuneStatus(task, check.Status, check.Details);
+                    return;
+                }
+
+                SetAutotuneStatus(task, "выполняется...", check.Details);
+                AutotuneResult result = await Task.Run(delegate { return task.Run(); });
+                SetAutotuneStatus(task, result.Status, result.Details);
+            }
+            catch (Exception ex)
+            {
+                SetAutotuneStatus(task, "Ошибка", ex.Message);
+            }
+        }
+
+        private void SetAutotuneStatus(AutotuneTaskDefinition task, string status, string details)
+        {
+            DataGridViewRow row;
+            if (!autotuneItems.TryGetValue(task.Id, out row))
+                return;
+
+            row.Cells["Status"].Value = status;
+            row.Cells["Details"].Value = details ?? string.Empty;
+            row.DefaultCellStyle.ForeColor = StatusColor(status);
+        }
+
+        private void SetAutotuneButtons(bool enabled)
+        {
+            runAllAutotuneButton.Enabled = enabled;
+            refreshAutotuneButton.Enabled = enabled;
+        }
+
+        private bool TryBeginAutotuneOperation()
+        {
+            if (autotuneRunning)
+                return false;
+
+            autotuneRunning = true;
+            SetAutotuneButtons(false);
+            return true;
+        }
+
+        private void EndAutotuneOperation()
+        {
+            autotuneRunning = false;
+            SetAutotuneButtons(true);
+        }
+
+        private static Color StatusColor(string status)
+        {
+            if (string.IsNullOrEmpty(status))
+                return SystemColors.WindowText;
+
+            string normalized = status.ToLowerInvariant();
+            if (normalized.Contains("частично") || normalized.Contains("требуется") || normalized.Contains("пропущено"))
+                return Color.DarkOrange;
+            if (normalized.Contains("ошибка") || normalized.Contains("нет ") || normalized.Contains("не "))
+                return Color.FromArgb(190, 30, 30);
+            if (normalized.Contains("выполнено"))
+                return Color.FromArgb(0, 120, 0);
+
+            return SystemColors.WindowText;
         }
 
         private static string FormatBool(bool? value)
