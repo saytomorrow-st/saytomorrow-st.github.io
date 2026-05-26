@@ -274,10 +274,9 @@ namespace SayTomorrowUtility
 
         private async Task RefreshAutotuneStatusesAsync()
         {
-            if (autotuneRunning)
+            if (!TryBeginAutotuneOperation())
                 return;
 
-            SetAutotuneButtons(false);
             try
             {
                 foreach (AutotuneTaskDefinition task in autotuneTasks)
@@ -289,7 +288,7 @@ namespace SayTomorrowUtility
             }
             finally
             {
-                SetAutotuneButtons(true);
+                EndAutotuneOperation();
             }
         }
 
@@ -308,63 +307,63 @@ namespace SayTomorrowUtility
 
         private async Task RunAllAutotuneAsync()
         {
-            DefenderStatus defender = await Task.Run(delegate { return DefenderMonitor.Query(); });
-            if (defender.RealTimeProtectionEnabled == true)
-            {
-                DialogResult answer = MessageBox.Show(
-                    "Защита в реальном времени Microsoft Defender включена. Некоторые silent-установщики из папки extra могут блокироваться. Временно отключить её можно кнопкой \"Перейти в Защитник Windows\".\n\nПродолжить автонастройку сейчас?",
-                    "Предупреждение",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning);
-                if (answer != DialogResult.Yes)
-                    return;
-            }
-
-            DialogResult confirm = MessageBox.Show(
-                "Автонастройка запустит системные изменения от имени администратора: сеть, параметры Windows Update, silent-установщики, тему, обои и разметку только полностью пустых RAW-дисков.\n\nПродолжить?",
-                "Автонастройка",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning);
-            if (confirm != DialogResult.Yes)
+            if (!TryBeginAutotuneOperation())
                 return;
 
-            autotuneRunning = true;
-            SetAutotuneButtons(false);
             try
             {
+                DefenderStatus defender = await Task.Run(delegate { return DefenderMonitor.Query(); });
+                if (defender.RealTimeProtectionEnabled == true)
+                {
+                    DialogResult answer = MessageBox.Show(
+                        "Защита в реальном времени Microsoft Defender включена. Некоторые silent-установщики из папки extra могут блокироваться. Временно отключить её можно кнопкой \"Перейти в Защитник Windows\".\n\nПродолжить автонастройку сейчас?",
+                        "Предупреждение",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+                    if (answer != DialogResult.Yes)
+                        return;
+                }
+
+                DialogResult confirm = MessageBox.Show(
+                    "Автонастройка запустит системные изменения от имени администратора: сеть, параметры Windows Update, silent-установщики, тему, обои и разметку только полностью пустых RAW-дисков.\n\nПродолжить?",
+                    "Автонастройка",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                if (confirm != DialogResult.Yes)
+                    return;
+
                 foreach (AutotuneTaskDefinition task in autotuneTasks)
                     await RunAutotuneTaskCoreAsync(task, false);
             }
             finally
             {
-                autotuneRunning = false;
-                SetAutotuneButtons(true);
+                EndAutotuneOperation();
             }
         }
 
         private async Task RunSingleAutotuneTaskAsync(AutotuneTaskDefinition task)
         {
-            if (task.Destructive)
-            {
-                DialogResult confirm = MessageBox.Show(
-                    "Эта задача размечает только полностью пустые RAW-диски, но всё равно меняет накопители. Проверь, что подключены только нужные диски.\n\nЗапустить?",
-                    task.Title,
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning);
-                if (confirm != DialogResult.Yes)
-                    return;
-            }
+            if (!TryBeginAutotuneOperation())
+                return;
 
-            autotuneRunning = true;
-            SetAutotuneButtons(false);
             try
             {
+                if (task.Destructive)
+                {
+                    DialogResult confirm = MessageBox.Show(
+                        "Эта задача размечает только полностью пустые RAW-диски, но всё равно меняет накопители. Проверь, что подключены только нужные диски.\n\nЗапустить?",
+                        task.Title,
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+                    if (confirm != DialogResult.Yes)
+                        return;
+                }
+
                 await RunAutotuneTaskCoreAsync(task, true);
             }
             finally
             {
-                autotuneRunning = false;
-                SetAutotuneButtons(true);
+                EndAutotuneOperation();
             }
         }
 
@@ -398,6 +397,22 @@ namespace SayTomorrowUtility
         {
             runAllAutotuneButton.Enabled = enabled;
             refreshAutotuneButton.Enabled = enabled;
+        }
+
+        private bool TryBeginAutotuneOperation()
+        {
+            if (autotuneRunning)
+                return false;
+
+            autotuneRunning = true;
+            SetAutotuneButtons(false);
+            return true;
+        }
+
+        private void EndAutotuneOperation()
+        {
+            autotuneRunning = false;
+            SetAutotuneButtons(true);
         }
 
         private static Color StatusColor(string status)

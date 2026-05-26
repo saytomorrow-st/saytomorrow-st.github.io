@@ -46,7 +46,6 @@ namespace SayTomorrowUtility
     internal static class AutotuneManager
     {
         private const string WifiSsid = "TBG-SERVICE-RND_WiFi5";
-        private const string WifiPassword = "11110000k";
 
         public static List<AutotuneTaskDefinition> CreateTasks()
         {
@@ -74,6 +73,11 @@ namespace SayTomorrowUtility
             get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wallpapers"); }
         }
 
+        private static string WifiPasswordPath
+        {
+            get { return Path.Combine(ExtraDirectory, "wifi-password.txt"); }
+        }
+
         private static AutotuneResult CheckNetwork()
         {
             if (HasConnectedNetwork())
@@ -81,6 +85,9 @@ namespace SayTomorrowUtility
 
             if (!HasWifiAdapter())
                 return new AutotuneResult(false, "Нет подключения", "Wi‑Fi модуль не найден, LAN тоже не подключен.");
+
+            if (!File.Exists(WifiPasswordPath))
+                return new AutotuneResult(false, "Нет пароля Wi‑Fi", "Создай файл extra\\wifi-password.txt рядом с exe и положи туда пароль от " + WifiSsid + ".");
 
             return new AutotuneResult(false, "Требуется подключение", "Wi‑Fi модуль найден, сеть не подключена.");
         }
@@ -94,6 +101,10 @@ namespace SayTomorrowUtility
             if (!HasWifiAdapter())
                 return new AutotuneResult(false, "Пропущено", "Wi‑Fi модуль не найден.");
 
+            string wifiPassword = ReadWifiPassword();
+            if (string.IsNullOrWhiteSpace(wifiPassword))
+                return new AutotuneResult(false, "Нет пароля Wi‑Fi", "Создай файл extra\\wifi-password.txt рядом с exe.");
+
             string profilePath = Path.Combine(Path.GetTempPath(), "saytomorrow_wifi.xml");
             string xml =
                 "<?xml version=\"1.0\"?>" +
@@ -102,7 +113,7 @@ namespace SayTomorrowUtility
                 "<SSIDConfig><SSID><name>" + EscapeXml(WifiSsid) + "</name></SSID></SSIDConfig>" +
                 "<connectionType>ESS</connectionType><connectionMode>auto</connectionMode>" +
                 "<MSM><security><authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption>" +
-                "<sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>" + EscapeXml(WifiPassword) + "</keyMaterial></sharedKey>" +
+                "<sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>" + EscapeXml(wifiPassword) + "</keyMaterial></sharedKey>" +
                 "</security></MSM></WLANProfile>";
 
             File.WriteAllText(profilePath, xml, Encoding.UTF8);
@@ -423,16 +434,30 @@ namespace SayTomorrowUtility
                     if (process == null)
                         return new ProcessResult { ExitCode = -1, Output = "Не удалось запустить процесс." };
 
-                    string output = process.StandardOutput.ReadToEnd();
-                    string error = process.StandardError.ReadToEnd();
+                    StringBuilder output = new StringBuilder();
+                    StringBuilder error = new StringBuilder();
+                    process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                    {
+                        if (e.Data != null)
+                            output.AppendLine(e.Data);
+                    };
+                    process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
+                    {
+                        if (e.Data != null)
+                            error.AppendLine(e.Data);
+                    };
+                    process.BeginOutputReadLine();
+                    process.BeginErrorReadLine();
+
                     if (!process.WaitForExit(timeoutMs))
                     {
                         try { process.Kill(); } catch { }
                         return new ProcessResult { ExitCode = -2, Output = "Таймаут: " + fileName };
                     }
+                    process.WaitForExit();
 
                     result.ExitCode = process.ExitCode;
-                    result.Output = (output + Environment.NewLine + error).Trim();
+                    result.Output = (output.ToString() + Environment.NewLine + error.ToString()).Trim();
                 }
             }
             catch (Exception ex)
@@ -442,6 +467,21 @@ namespace SayTomorrowUtility
             }
 
             return result;
+        }
+
+        private static string ReadWifiPassword()
+        {
+            try
+            {
+                if (!File.Exists(WifiPasswordPath))
+                    return string.Empty;
+
+                return File.ReadAllText(WifiPasswordPath, Encoding.UTF8).Trim();
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         private static int ToInt(object value)
