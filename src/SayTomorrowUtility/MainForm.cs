@@ -282,7 +282,17 @@ namespace SayTomorrowUtility
                 foreach (AutotuneTaskDefinition task in autotuneTasks)
                 {
                     SetAutotuneStatus(task, "проверка...", "");
-                    AutotuneResult result = await Task.Run(delegate { return task.Check(); });
+                    AutotuneResult result = await Task.Run(delegate
+                    {
+                        try
+                        {
+                            return task.Check();
+                        }
+                        catch (Exception ex)
+                        {
+                            return new AutotuneResult(false, "Ошибка", ex.Message);
+                        }
+                    });
                     SetAutotuneStatus(task, result.Status, result.Details);
                 }
             }
