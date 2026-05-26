@@ -45,8 +45,6 @@ namespace SayTomorrowUtility
 
     internal static class AutotuneManager
     {
-        private const string WifiSsid = "TBG-SERVICE-RND_WiFi5";
-
         public static List<AutotuneTaskDefinition> CreateTasks()
         {
             return new List<AutotuneTaskDefinition>
@@ -73,7 +71,7 @@ namespace SayTomorrowUtility
             get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wallpapers"); }
         }
 
-        private static string WifiPasswordPath
+        private static string WifiConfigPath
         {
             get { return Path.Combine(ExtraDirectory, "wifi-password.txt"); }
         }
@@ -86,8 +84,9 @@ namespace SayTomorrowUtility
             if (!HasWifiAdapter())
                 return new AutotuneResult(false, "Нет подключения", "Wi‑Fi модуль не найден, LAN тоже не подключен.");
 
-            if (!File.Exists(WifiPasswordPath))
-                return new AutotuneResult(false, "Нет пароля Wi‑Fi", "Создай файл extra\\wifi-password.txt рядом с exe и положи туда пароль от " + WifiSsid + ".");
+            WifiConfig wifiConfig = ReadWifiConfig();
+            if (!wifiConfig.IsValid)
+                return new AutotuneResult(false, "Нет данных Wi‑Fi", "Создай файл extra\\wifi-password.txt: первая строка — SSID, вторая строка — пароль.");
 
             return new AutotuneResult(false, "Требуется подключение", "Wi‑Fi модуль найден, сеть не подключена.");
         }
@@ -101,26 +100,26 @@ namespace SayTomorrowUtility
             if (!HasWifiAdapter())
                 return new AutotuneResult(false, "Пропущено", "Wi‑Fi модуль не найден.");
 
-            string wifiPassword = ReadWifiPassword();
-            if (string.IsNullOrWhiteSpace(wifiPassword))
-                return new AutotuneResult(false, "Нет пароля Wi‑Fi", "Создай файл extra\\wifi-password.txt рядом с exe.");
+            WifiConfig wifiConfig = ReadWifiConfig();
+            if (!wifiConfig.IsValid)
+                return new AutotuneResult(false, "Нет данных Wi‑Fi", "Создай файл extra\\wifi-password.txt: первая строка — SSID, вторая строка — пароль.");
 
             string profilePath = Path.Combine(Path.GetTempPath(), "saytomorrow_wifi.xml");
             string xml =
                 "<?xml version=\"1.0\"?>" +
                 "<WLANProfile xmlns=\"http://www.microsoft.com/networking/WLAN/profile/v1\">" +
-                "<name>" + EscapeXml(WifiSsid) + "</name>" +
-                "<SSIDConfig><SSID><name>" + EscapeXml(WifiSsid) + "</name></SSID></SSIDConfig>" +
+                "<name>" + EscapeXml(wifiConfig.Ssid) + "</name>" +
+                "<SSIDConfig><SSID><name>" + EscapeXml(wifiConfig.Ssid) + "</name></SSID></SSIDConfig>" +
                 "<connectionType>ESS</connectionType><connectionMode>auto</connectionMode>" +
                 "<MSM><security><authEncryption><authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption>" +
-                "<sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>" + EscapeXml(wifiPassword) + "</keyMaterial></sharedKey>" +
+                "<sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>" + EscapeXml(wifiConfig.Password) + "</keyMaterial></sharedKey>" +
                 "</security></MSM></WLANProfile>";
 
-            File.WriteAllText(profilePath, xml, Encoding.UTF8);
+                File.WriteAllText(profilePath, xml, Encoding.UTF8);
             try
             {
                 RunProcess("netsh", "wlan add profile filename=\"" + profilePath + "\" user=all", 30000);
-                ProcessResult connect = RunProcess("netsh", "wlan connect name=\"" + WifiSsid + "\" ssid=\"" + WifiSsid + "\"", 30000);
+                ProcessResult connect = RunProcess("netsh", "wlan connect name=\"" + wifiConfig.Ssid + "\" ssid=\"" + wifiConfig.Ssid + "\"", 30000);
                 return new AutotuneResult(connect.ExitCode == 0, connect.ExitCode == 0 ? "Запущено" : "Ошибка", connect.Output);
             }
             finally
@@ -476,18 +475,33 @@ namespace SayTomorrowUtility
             return result;
         }
 
-        private static string ReadWifiPassword()
+        private static WifiConfig ReadWifiConfig()
         {
             try
             {
-                if (!File.Exists(WifiPasswordPath))
-                    return string.Empty;
+                if (!File.Exists(WifiConfigPath))
+                    return new WifiConfig();
 
-                return File.ReadAllText(WifiPasswordPath, Encoding.UTF8).Trim();
+                string[] lines = File.ReadAllLines(WifiConfigPath, Encoding.UTF8);
+                if (lines.Length < 2)
+                    return new WifiConfig();
+
+                return new WifiConfig { Ssid = lines[0].Trim(), Password = lines[1].Trim() };
             }
             catch
             {
-                return string.Empty;
+                return new WifiConfig();
+            }
+        }
+
+        private sealed class WifiConfig
+        {
+            public string Ssid { get; set; }
+            public string Password { get; set; }
+
+            public bool IsValid
+            {
+                get { return !string.IsNullOrWhiteSpace(Ssid) && !string.IsNullOrWhiteSpace(Password); }
             }
         }
 
