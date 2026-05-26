@@ -276,6 +276,9 @@ namespace SayTomorrowUtility
         {
             string script = "Get-Disk | Where-Object { $_.PartitionStyle -eq 'RAW' -and $_.BusType -ne 'USB' } | Select-Object -ExpandProperty Number";
             ProcessResult result = RunProcess("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -Command \"" + script + "\"", 60000);
+            if (result.ExitCode != 0)
+                return new AutotuneResult(false, "Ошибка проверки", result.Output);
+
             bool hasRaw = result.Output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Any(IsInteger);
             return new AutotuneResult(!hasRaw, hasRaw ? "Есть пустые диски" : "Выполнено", hasRaw ? result.Output.Trim() : "RAW-диски не найдены.");
         }
