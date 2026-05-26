@@ -157,7 +157,7 @@ namespace SayTomorrowUtility
         private static AutotuneResult RunOfficeInstall()
         {
             string officeDir = Path.Combine(ExtraDirectory, "office");
-            string setup = File.Exists(Path.Combine(officeDir, "setup.exe")) ? Path.Combine(officeDir, "setup.exe") : FindFile(ExtraDirectory, "setup.exe", "office");
+            string setup = File.Exists(Path.Combine(officeDir, "setup.exe")) ? Path.Combine(officeDir, "setup.exe") : FindFile(ExtraDirectory, "setup.exe", "setup");
             if (string.IsNullOrEmpty(setup))
                 return new AutotuneResult(false, "Нет установщика", "Положи Office Deployment Tool setup.exe и configuration.xml в extra\\office.");
 

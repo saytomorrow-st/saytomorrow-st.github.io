@@ -369,17 +369,24 @@ namespace SayTomorrowUtility
 
         private async Task RunAutotuneTaskCoreAsync(AutotuneTaskDefinition task, bool forceRun)
         {
-            SetAutotuneStatus(task, "проверка...", "");
-            AutotuneResult check = await Task.Run(delegate { return task.Check(); });
-            if (check.Done && !forceRun)
+            try
             {
-                SetAutotuneStatus(task, check.Status, check.Details);
-                return;
-            }
+                SetAutotuneStatus(task, "проверка...", "");
+                AutotuneResult check = await Task.Run(delegate { return task.Check(); });
+                if (check.Done && !forceRun)
+                {
+                    SetAutotuneStatus(task, check.Status, check.Details);
+                    return;
+                }
 
-            SetAutotuneStatus(task, "выполняется...", check.Details);
-            AutotuneResult result = await Task.Run(delegate { return task.Run(); });
-            SetAutotuneStatus(task, result.Status, result.Details);
+                SetAutotuneStatus(task, "выполняется...", check.Details);
+                AutotuneResult result = await Task.Run(delegate { return task.Run(); });
+                SetAutotuneStatus(task, result.Status, result.Details);
+            }
+            catch (Exception ex)
+            {
+                SetAutotuneStatus(task, "Ошибка", ex.Message);
+            }
         }
 
         private void SetAutotuneStatus(AutotuneTaskDefinition task, string status, string details)
