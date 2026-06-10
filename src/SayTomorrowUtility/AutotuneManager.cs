@@ -431,7 +431,7 @@ namespace SayTomorrowUtility
 
         private static bool IsOfficeActivated(OfficeInstallInfo office)
         {
-            foreach (ManagementObject license in Query(@"root\CIMV2", "SELECT LicenseStatus, PartialProductKey, ApplicationID, Name, Description FROM SoftwareLicensingProduct WHERE PartialProductKey IS NOT NULL"))
+            foreach (ManagementObject license in Query(@"root\CIMV2", "SELECT LicenseStatus, PartialProductKey, ApplicationID, Name, Description FROM SoftwareLicensingProduct"))
             {
                 string applicationId = Convert.ToString(license["ApplicationID"]);
                 string name = Convert.ToString(license["Name"]);
@@ -444,13 +444,36 @@ namespace SayTomorrowUtility
             }
 
             string officeStatus = CheckOfficeActivationText(office);
-            if (ContainsAny(officeStatus, "LICENSE STATUS:  ---LICENSED---", "LICENSE STATUS: LICENSED"))
+            if (HasLicensedOfficeStatus(officeStatus))
                 return true;
 
             if (ContainsAny(officeStatus, "---UNLICENSED---", "UNLICENSED", "NOTIFICATIONS", "не актив", "нелиценз"))
                 return false;
 
-            return ContainsAny(officeStatus, "лицензирован", "активирован");
+            return false;
+        }
+
+        private static bool HasLicensedOfficeStatus(string officeStatus)
+        {
+            if (string.IsNullOrWhiteSpace(officeStatus))
+                return false;
+
+            string[] lines = officeStatus.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string rawLine in lines)
+            {
+                string line = rawLine.Trim();
+                bool explicitEnglishLicensed = line.IndexOf("LICENSE STATUS", StringComparison.OrdinalIgnoreCase) >= 0
+                    && line.IndexOf("---LICENSED---", StringComparison.OrdinalIgnoreCase) >= 0;
+                bool explicitRussianLicensed = (line.IndexOf("состояние лиценз", StringComparison.OrdinalIgnoreCase) >= 0
+                    || line.IndexOf("статус лиценз", StringComparison.OrdinalIgnoreCase) >= 0)
+                    && line.IndexOf("лицензирован", StringComparison.OrdinalIgnoreCase) >= 0
+                    && line.IndexOf("нелиценз", StringComparison.OrdinalIgnoreCase) < 0;
+
+                if (explicitEnglishLicensed || explicitRussianLicensed)
+                    return true;
+            }
+
+            return false;
         }
 
         private static string FindOfficeSetup()
