@@ -444,10 +444,13 @@ namespace SayTomorrowUtility
             }
 
             string officeStatus = CheckOfficeActivationText(office);
-            if (ContainsAny(officeStatus, "---LICENSED---", "LICENSE STATUS:  LICENSED", "лицензирован", "активирован"))
+            if (ContainsAny(officeStatus, "LICENSE STATUS:  ---LICENSED---", "LICENSE STATUS: LICENSED"))
                 return true;
 
-            return false;
+            if (ContainsAny(officeStatus, "---UNLICENSED---", "UNLICENSED", "NOTIFICATIONS", "не актив", "нелиценз"))
+                return false;
+
+            return ContainsAny(officeStatus, "лицензирован", "активирован");
         }
 
         private static string FindOfficeSetup()
