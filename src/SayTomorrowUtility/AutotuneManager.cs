@@ -49,15 +49,15 @@ namespace SayTomorrowUtility
         {
             return new List<AutotuneTaskDefinition>
             {
-                new AutotuneTaskDefinition("network", "Сеть: подключение Wi‑Fi или статус LAN", CheckNetwork, RunNetwork),
-                new AutotuneTaskDefinition("drivers", "Отключить автообновление драйверов из Windows Update", CheckDriverUpdatesDisabled, RunDisableDriverUpdates),
-                new AutotuneTaskDefinition("office", "Silent-установка Microsoft Office 2021 RU x64 из extra", CheckOfficeInstalled, RunOfficeInstall),
-                new AutotuneTaskDefinition("redists", "Silent-установка DirectX/.NET/VC++/XNA/OpenAL библиотек из extra", CheckRedistsInstalled, RunRedistsInstall),
-                new AutotuneTaskDefinition("wallpaper", "Случайные обои из wallpapers", CheckWallpaper, RunWallpaper),
-                new AutotuneTaskDefinition("darktheme", "Темная тема Windows", CheckDarkTheme, RunDarkTheme),
-                new AutotuneTaskDefinition("rudesktop", "Silent-установка RuDesktop из extra", CheckRuDesktop, RunRuDesktopInstall),
-                new AutotuneTaskDefinition("activation", "Проверка активации Windows и Office", CheckActivation, CheckActivation),
-                new AutotuneTaskDefinition("rawdisks", "Разметить полностью пустые накопители в NTFS", CheckRawDisks, RunPartitionRawDisks, true)
+                new AutotuneTaskDefinition("network", "Сеть", CheckNetwork, RunNetwork),
+                new AutotuneTaskDefinition("drivers", "Обновления драйверов", CheckDriverUpdatesDisabled, RunDisableDriverUpdates),
+                new AutotuneTaskDefinition("office", "Установка Office", CheckOfficeInstalled, RunOfficeInstall),
+                new AutotuneTaskDefinition("redists", "Библиотеки", CheckRedistsInstalled, RunRedistsInstall),
+                new AutotuneTaskDefinition("wallpaper", "Обои", CheckWallpaper, RunWallpaper),
+                new AutotuneTaskDefinition("darktheme", "Темная тема", CheckDarkTheme, RunDarkTheme),
+                new AutotuneTaskDefinition("rudesktop", "RuDesktop", CheckRuDesktop, RunRuDesktopInstall),
+                new AutotuneTaskDefinition("activation", "Активация", CheckActivation, CheckActivation),
+                new AutotuneTaskDefinition("rawdisks", "Диски", CheckRawDisks, RunPartitionRawDisks, true)
             };
         }
 
@@ -149,19 +149,21 @@ namespace SayTomorrowUtility
 
         private static AutotuneResult CheckOfficeInstalled()
         {
-            bool installed = RegistryKeyExists(@"SOFTWARE\Microsoft\Office\ClickToRun\Configuration") || RegistryKeyExists(@"SOFTWARE\WOW6432Node\Microsoft\Office\ClickToRun\Configuration");
-            return new AutotuneResult(installed, installed ? "Выполнено" : "Не установлено", installed ? "Office Click-to-Run найден." : "Ожидается установщик в extra\\office или extra.");
+            OfficeInstallInfo info = GetOfficeInstallInfo();
+            return new AutotuneResult(info.Installed, info.Installed ? "Выполнено" : "Не установлено", info.Installed ? "Office найден." : "Ожидается setup.exe и configuration*.xml в extra или extra\\Office.");
         }
 
         private static AutotuneResult RunOfficeInstall()
         {
-            string officeDir = Path.Combine(ExtraDirectory, "office");
-            string setup = File.Exists(Path.Combine(officeDir, "setup.exe")) ? Path.Combine(officeDir, "setup.exe") : FindFile(ExtraDirectory, "setup.exe", "setup");
+            string setup = FindOfficeSetup();
             if (string.IsNullOrEmpty(setup))
-                return new AutotuneResult(false, "Нет установщика", "Положи Office Deployment Tool setup.exe и configuration.xml в extra\\office.");
+                return new AutotuneResult(false, "Нет установщика", "Положи setup.exe из Office Deployment Tool в extra или extra\\Office.");
 
-            string config = File.Exists(Path.Combine(Path.GetDirectoryName(setup), "configuration.xml")) ? Path.Combine(Path.GetDirectoryName(setup), "configuration.xml") : FindFile(Path.GetDirectoryName(setup), "*.xml", "config");
-            string args = string.IsNullOrEmpty(config) ? "/configure configuration.xml" : "/configure \"" + config + "\"";
+            string config = FindOfficeConfiguration(setup);
+            if (string.IsNullOrEmpty(config))
+                return new AutotuneResult(false, "Нет конфигурации", "Положи configuration*.xml рядом с setup.exe, в extra или extra\\Office.");
+
+            string args = "/configure \"" + config + "\"";
             ProcessResult result = RunProcess(setup, args, 60 * 60 * 1000);
             return new AutotuneResult(result.ExitCode == 0, result.ExitCode == 0 ? "Выполнено" : "Ошибка установки", result.Output);
         }
@@ -264,11 +266,20 @@ namespace SayTomorrowUtility
         {
             ProcessResult windows = RunProcess("cscript.exe", "//Nologo \"%windir%\\system32\\slmgr.vbs\" /xpr", 60000);
             bool windowsActivated = windows.Output.IndexOf("permanently activated", StringComparison.OrdinalIgnoreCase) >= 0 || windows.Output.IndexOf("активирована", StringComparison.OrdinalIgnoreCase) >= 0;
-            string officeStatus = CheckOfficeActivationText();
-            bool officeActivated = officeStatus.IndexOf("LICENSED", StringComparison.OrdinalIgnoreCase) >= 0 || officeStatus.IndexOf("лиценз", StringComparison.OrdinalIgnoreCase) >= 0;
+            OfficeInstallInfo office = GetOfficeInstallInfo();
+            if (!office.Installed)
+            {
+                string noOfficeDetails = "Windows: " + (windowsActivated ? "активирована" : "не активирована") + "; Office: не установлен.";
+                return new AutotuneResult(windowsActivated, windowsActivated ? "Выполнено" : "Не активировано", noOfficeDetails);
+            }
+
+            string officeStatus = CheckOfficeActivationText(office);
+            bool officeActivated = officeStatus.IndexOf("LICENSED", StringComparison.OrdinalIgnoreCase) >= 0
+                || officeStatus.IndexOf("активирован", StringComparison.OrdinalIgnoreCase) >= 0
+                || officeStatus.IndexOf("лиценз", StringComparison.OrdinalIgnoreCase) >= 0;
             bool done = windowsActivated && officeActivated;
-            string details = "Windows: " + (windowsActivated ? "активирована" : "не подтверждено") + "; Office: " + (officeActivated ? "активирован" : "не подтверждено") + ". Автозапуск активаторов не выполняется.";
-            return new AutotuneResult(done, done ? "Выполнено" : "Требуется ручная проверка", details);
+            string details = "Windows: " + (windowsActivated ? "активирована" : "не активирована") + "; Office: " + (officeActivated ? "активирован" : "не активирован") + ".";
+            return new AutotuneResult(done, done ? "Выполнено" : "Не активировано", details);
         }
 
         private static AutotuneResult CheckRawDisks()
@@ -329,8 +340,51 @@ namespace SayTomorrowUtility
             return false;
         }
 
-        private static string CheckOfficeActivationText()
+        private static OfficeInstallInfo GetOfficeInstallInfo()
         {
+            OfficeInstallInfo info = new OfficeInstallInfo();
+            string clickToRunPath = ReadRegistryString(@"SOFTWARE\Microsoft\Office\ClickToRun\Configuration", "ClientFolder")
+                ?? ReadRegistryString(@"SOFTWARE\WOW6432Node\Microsoft\Office\ClickToRun\Configuration", "ClientFolder");
+
+            if (!string.IsNullOrEmpty(clickToRunPath) && Directory.Exists(clickToRunPath))
+            {
+                info.Installed = true;
+                info.RootPath = clickToRunPath;
+                return info;
+            }
+
+            string[] roots =
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+            };
+
+            foreach (string root in roots)
+            {
+                if (string.IsNullOrEmpty(root))
+                    continue;
+
+                string officeRoot = Path.Combine(root, "Microsoft Office");
+                if (!Directory.Exists(officeRoot))
+                    continue;
+
+                info.Installed = true;
+                info.RootPath = officeRoot;
+                return info;
+            }
+
+            return info;
+        }
+
+        private static string CheckOfficeActivationText(OfficeInstallInfo office)
+        {
+            if (office != null && !string.IsNullOrEmpty(office.RootPath) && Directory.Exists(office.RootPath))
+            {
+                string ospp = Directory.GetFiles(office.RootPath, "ospp.vbs", SearchOption.AllDirectories).FirstOrDefault();
+                if (!string.IsNullOrEmpty(ospp))
+                    return RunProcess("cscript.exe", "//Nologo \"" + ospp + "\" /dstatus", 60000).Output;
+            }
+
             string[] roots =
             {
                 Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
@@ -352,6 +406,70 @@ namespace SayTomorrowUtility
             }
 
             return "ospp.vbs не найден";
+        }
+
+        private static string FindOfficeSetup()
+        {
+            string[] preferredDirs =
+            {
+                Path.Combine(ExtraDirectory, "Office"),
+                Path.Combine(ExtraDirectory, "office"),
+                ExtraDirectory
+            };
+
+            foreach (string directory in preferredDirs)
+            {
+                string setup = Path.Combine(directory, "setup.exe");
+                if (File.Exists(setup) && LooksLikeOfficeSetup(setup))
+                    return setup;
+            }
+
+            foreach (string setup in Directory.Exists(ExtraDirectory) ? Directory.GetFiles(ExtraDirectory, "setup.exe", SearchOption.AllDirectories) : new string[0])
+            {
+                if (LooksLikeOfficeSetup(setup))
+                    return setup;
+            }
+
+            return string.Empty;
+        }
+
+        private static string FindOfficeConfiguration(string setup)
+        {
+            string setupDir = Path.GetDirectoryName(setup);
+            string[] directories = new[] { setupDir, Path.Combine(ExtraDirectory, "Office"), Path.Combine(ExtraDirectory, "office"), ExtraDirectory }
+                .Where(d => !string.IsNullOrEmpty(d) && Directory.Exists(d))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            foreach (string directory in directories)
+            {
+                string direct = Path.Combine(directory, "configuration.xml");
+                if (File.Exists(direct))
+                    return direct;
+
+                string match = Directory.GetFiles(directory, "configuration*.xml", SearchOption.TopDirectoryOnly).FirstOrDefault();
+                if (!string.IsNullOrEmpty(match))
+                    return match;
+            }
+
+            string recursive = Directory.Exists(ExtraDirectory) ? Directory.GetFiles(ExtraDirectory, "configuration*.xml", SearchOption.AllDirectories).FirstOrDefault() : null;
+            return recursive ?? string.Empty;
+        }
+
+        private static bool LooksLikeOfficeSetup(string setup)
+        {
+            string directory = Path.GetDirectoryName(setup);
+            if (string.IsNullOrEmpty(directory))
+                return false;
+
+            if (Directory.GetFiles(directory, "configuration*.xml", SearchOption.TopDirectoryOnly).Length > 0)
+                return true;
+
+            if (Directory.GetDirectories(directory, "Office", SearchOption.TopDirectoryOnly).Length > 0)
+                return true;
+
+            return setup.IndexOf("officedeploymenttool", StringComparison.OrdinalIgnoreCase) >= 0
+                || directory.IndexOf("office", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static void RunInstallerIfFound(List<string> logs, string[] aliases, string arguments)
@@ -390,6 +508,19 @@ namespace SayTomorrowUtility
             RegistryKey root = path.StartsWith("SOFTWARE\\WOW6432Node", StringComparison.OrdinalIgnoreCase) ? Registry.LocalMachine : Registry.LocalMachine;
             using (RegistryKey key = root.OpenSubKey(path))
                 return key != null;
+        }
+
+        private static string ReadRegistryString(string path, string name)
+        {
+            try
+            {
+                using (RegistryKey key = Registry.LocalMachine.OpenSubKey(path))
+                    return key == null ? null : key.GetValue(name) as string;
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private static bool ProgramFilesContains(string folderName)
@@ -431,8 +562,8 @@ namespace SayTomorrowUtility
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
-                    StandardOutputEncoding = Encoding.UTF8,
-                    StandardErrorEncoding = Encoding.UTF8
+                    StandardOutputEncoding = Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage),
+                    StandardErrorEncoding = Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage)
                 };
 
                 using (Process process = Process.Start(info))
@@ -503,6 +634,12 @@ namespace SayTomorrowUtility
             {
                 get { return !string.IsNullOrWhiteSpace(Ssid) && !string.IsNullOrWhiteSpace(Password); }
             }
+        }
+
+        private sealed class OfficeInstallInfo
+        {
+            public bool Installed { get; set; }
+            public string RootPath { get; set; }
         }
 
         private static int ToInt(object value)

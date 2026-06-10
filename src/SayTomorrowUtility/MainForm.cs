@@ -15,7 +15,6 @@ namespace SayTomorrowUtility
         private readonly ListView informationList;
         private readonly DataGridView autotuneGrid;
         private readonly Button runAllAutotuneButton;
-        private readonly Button refreshAutotuneButton;
         private readonly List<AutotuneTaskDefinition> autotuneTasks;
         private readonly Dictionary<string, DataGridViewRow> autotuneItems;
         private readonly Timer defenderTimer;
@@ -111,15 +110,7 @@ namespace SayTomorrowUtility
                 Text = "Автонастройка"
             };
             runAllAutotuneButton.Click += async delegate { await RunAllAutotuneAsync(); };
-            refreshAutotuneButton = new Button
-            {
-                Dock = DockStyle.Right,
-                Width = 150,
-                Text = "Проверить"
-            };
-            refreshAutotuneButton.Click += async delegate { await RefreshAutotuneStatusesAsync(); };
             autotuneTop.Controls.Add(autotuneHint);
-            autotuneTop.Controls.Add(refreshAutotuneButton);
             autotuneTop.Controls.Add(runAllAutotuneButton);
 
             autotuneGrid = new DataGridView
@@ -320,6 +311,7 @@ namespace SayTomorrowUtility
             if (!TryBeginAutotuneOperation())
                 return;
 
+            bool refreshAfterRun = false;
             try
             {
                 DefenderStatus defender = await Task.Run(delegate { return DefenderMonitor.Query(); });
@@ -344,11 +336,15 @@ namespace SayTomorrowUtility
 
                 foreach (AutotuneTaskDefinition task in autotuneTasks)
                     await RunAutotuneTaskCoreAsync(task, false);
+                refreshAfterRun = true;
             }
             finally
             {
                 EndAutotuneOperation();
             }
+
+            if (refreshAfterRun)
+                await RefreshAutotuneStatusesAsync();
         }
 
         private async Task RunSingleAutotuneTaskAsync(AutotuneTaskDefinition task)
@@ -356,6 +352,7 @@ namespace SayTomorrowUtility
             if (!TryBeginAutotuneOperation())
                 return;
 
+            bool refreshAfterRun = false;
             try
             {
                 if (task.Destructive)
@@ -370,11 +367,15 @@ namespace SayTomorrowUtility
                 }
 
                 await RunAutotuneTaskCoreAsync(task, true);
+                refreshAfterRun = true;
             }
             finally
             {
                 EndAutotuneOperation();
             }
+
+            if (refreshAfterRun)
+                await RefreshAutotuneStatusesAsync();
         }
 
         private async Task RunAutotuneTaskCoreAsync(AutotuneTaskDefinition task, bool forceRun)
@@ -413,7 +414,6 @@ namespace SayTomorrowUtility
         private void SetAutotuneButtons(bool enabled)
         {
             runAllAutotuneButton.Enabled = enabled;
-            refreshAutotuneButton.Enabled = enabled;
         }
 
         private bool TryBeginAutotuneOperation()
