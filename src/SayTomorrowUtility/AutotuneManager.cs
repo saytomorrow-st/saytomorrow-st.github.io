@@ -187,12 +187,12 @@ namespace SayTomorrowUtility
                 return new AutotuneResult(false, "Нет папки extra", "Создай папку extra рядом с exe и положи туда redist-установщики.");
 
             List<string> logs = new List<string>();
-            RunInstallerIfFound(logs, new[] { "directx", "dxsetup" }, "/silent");
-            RunInstallerIfFound(logs, new[] { "dotnetfx40", "dotnetfx_full_x86_x64" }, "/q /norestart");
-            RunInstallerIfFound(logs, new[] { "oalinst", "openal" }, "/silent");
+            RunDirectXInstaller(logs);
+            RunInstallerIfFound(logs, new[] { "ndp481", "ndp48", "dotnetfx40", "dotnetfx_full_x86_x64" }, "/q /norestart");
+            RunInstallerIfFound(logs, new[] { "oalinst", "openal" }, "/S");
             RunInstallerIfFound(logs, new[] { "vc_redist.x64", "vcredist_x64", "visualcpp", "visual-cpp" }, "/quiet /norestart");
             RunInstallerIfFound(logs, new[] { "vc_redist.x86", "vcredist_x86" }, "/quiet /norestart");
-            RunInstallerIfFound(logs, new[] { "xnafx40", "xnafx40_redist" }, "/quiet /norestart");
+            RunMsiInstallerIfFound(logs, new[] { "xnafx40", "xnafx40_redist" });
             RunInstallerIfFound(logs, new[] { "verify-redist", "verify_redist" }, "/quiet /norestart");
             RunInstallerIfFound(logs, new[] { "offline redist", "offline-redist", "aio-runtimes" }, "/silent /norestart");
 
@@ -256,16 +256,19 @@ namespace SayTomorrowUtility
         {
             string installer = FindFile(ExtraDirectory, "*.exe", "rudesktop", "ru-desktop", "ru desktop");
             if (string.IsNullOrEmpty(installer))
+                installer = FindFile(ExtraDirectory, "*.msi", "rudesktop", "ru-desktop", "ru desktop");
+            if (string.IsNullOrEmpty(installer))
                 return new AutotuneResult(false, "Нет установщика", "Положи установщик RuDesktop в папку extra.");
 
-            ProcessResult result = RunProcess(installer, "/S /quiet /norestart", 30 * 60 * 1000);
+            ProcessResult result = HasExtension(installer, ".msi")
+                ? RunProcess("msiexec.exe", "/i \"" + installer + "\" /qn /norestart", 30 * 60 * 1000)
+                : RunProcess(installer, "/S /quiet /norestart", 30 * 60 * 1000);
             return new AutotuneResult(result.ExitCode == 0, result.ExitCode == 0 ? "Выполнено" : "Ошибка установки", result.Output);
         }
 
         private static AutotuneResult CheckActivation()
         {
-            ProcessResult windows = RunProcess("cscript.exe", "//Nologo \"%windir%\\system32\\slmgr.vbs\" /xpr", 60000);
-            bool windowsActivated = windows.Output.IndexOf("permanently activated", StringComparison.OrdinalIgnoreCase) >= 0 || windows.Output.IndexOf("активирована", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool windowsActivated = IsWindowsActivated();
             OfficeInstallInfo office = GetOfficeInstallInfo();
             if (!office.Installed)
             {
@@ -273,10 +276,7 @@ namespace SayTomorrowUtility
                 return new AutotuneResult(windowsActivated, windowsActivated ? "Выполнено" : "Не активировано", noOfficeDetails);
             }
 
-            string officeStatus = CheckOfficeActivationText(office);
-            bool officeActivated = officeStatus.IndexOf("LICENSED", StringComparison.OrdinalIgnoreCase) >= 0
-                || officeStatus.IndexOf("активирован", StringComparison.OrdinalIgnoreCase) >= 0
-                || officeStatus.IndexOf("лиценз", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool officeActivated = IsOfficeActivated(office);
             bool done = windowsActivated && officeActivated;
             string details = "Windows: " + (windowsActivated ? "активирована" : "не активирована") + "; Office: " + (officeActivated ? "активирован" : "не активирован") + ".";
             return new AutotuneResult(done, done ? "Выполнено" : "Не активировано", details);
@@ -408,6 +408,47 @@ namespace SayTomorrowUtility
             return "ospp.vbs не найден";
         }
 
+        private static bool IsWindowsActivated()
+        {
+            foreach (ManagementObject license in Query(@"root\CIMV2", "SELECT LicenseStatus, PartialProductKey, ApplicationID, Description FROM SoftwareLicensingProduct WHERE PartialProductKey IS NOT NULL"))
+            {
+                string applicationId = Convert.ToString(license["ApplicationID"]);
+                string description = Convert.ToString(license["Description"]);
+                if (ToInt(license["LicenseStatus"]) == 1
+                    && string.Equals(applicationId, "55c92734-d682-4d71-983e-d6ec3f16059f", StringComparison.OrdinalIgnoreCase)
+                    && ContainsAny(description, "Windows"))
+                    return true;
+            }
+
+            ProcessResult windows = RunProcess("cscript.exe", "//Nologo \"%windir%\\system32\\slmgr.vbs\" /xpr", 60000);
+            string output = windows.Output ?? string.Empty;
+            if (ContainsAny(output, "not activated", "не актив", "не удалось"))
+                return false;
+
+            return ContainsAny(output, "permanently activated", "activated", "активирован", "активирована");
+        }
+
+        private static bool IsOfficeActivated(OfficeInstallInfo office)
+        {
+            foreach (ManagementObject license in Query(@"root\CIMV2", "SELECT LicenseStatus, PartialProductKey, ApplicationID, Name, Description FROM SoftwareLicensingProduct WHERE PartialProductKey IS NOT NULL"))
+            {
+                string applicationId = Convert.ToString(license["ApplicationID"]);
+                string name = Convert.ToString(license["Name"]);
+                string description = Convert.ToString(license["Description"]);
+                if (ToInt(license["LicenseStatus"]) == 1
+                    && (string.Equals(applicationId, "0ff1ce15-a989-479d-af46-f275c6370663", StringComparison.OrdinalIgnoreCase)
+                        || ContainsAny(name, "Office")
+                        || ContainsAny(description, "Office")))
+                    return true;
+            }
+
+            string officeStatus = CheckOfficeActivationText(office);
+            if (ContainsAny(officeStatus, "---UNLICENSED---", "UNLICENSED", "NOTIFICATIONS", "не актив", "нелиценз"))
+                return false;
+
+            return ContainsAny(officeStatus, "---LICENSED---", "LICENSE STATUS:  LICENSED", "лицензирован", "активирован");
+        }
+
         private static string FindOfficeSetup()
         {
             string[] preferredDirs =
@@ -482,6 +523,55 @@ namespace SayTomorrowUtility
             }
 
             ProcessResult result = RunProcess(installer, arguments, 30 * 60 * 1000);
+            logs.Add(Path.GetFileName(installer) + ": exit " + result.ExitCode.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static void RunDirectXInstaller(List<string> logs)
+        {
+            string installer = FindFile(ExtraDirectory, "*.exe", "directx", "dxwebsetup", "dxsetup");
+            if (string.IsNullOrEmpty(installer))
+            {
+                logs.Add("Не найдено: DirectX");
+                return;
+            }
+
+            string extractDir = Path.Combine(Path.GetTempPath(), "saytomorrow_directx_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(extractDir);
+            try
+            {
+                ProcessResult extract = RunProcess(installer, "/Q /T:\"" + extractDir + "\"", 10 * 60 * 1000);
+                if (extract.ExitCode != 0)
+                {
+                    logs.Add(Path.GetFileName(installer) + ": extract exit " + extract.ExitCode.ToString(CultureInfo.InvariantCulture) + " " + extract.Output);
+                    return;
+                }
+
+                string dxsetup = Directory.GetFiles(extractDir, "DXSETUP.exe", SearchOption.AllDirectories).FirstOrDefault();
+                if (string.IsNullOrEmpty(dxsetup))
+                {
+                    logs.Add(Path.GetFileName(installer) + ": DXSETUP.exe не найден после распаковки");
+                    return;
+                }
+
+                ProcessResult install = RunProcess(dxsetup, "/silent", 20 * 60 * 1000);
+                logs.Add("DirectX: exit " + install.ExitCode.ToString(CultureInfo.InvariantCulture) + (string.IsNullOrEmpty(install.Output) ? string.Empty : " " + install.Output));
+            }
+            finally
+            {
+                try { Directory.Delete(extractDir, true); } catch { }
+            }
+        }
+
+        private static void RunMsiInstallerIfFound(List<string> logs, string[] aliases)
+        {
+            string installer = FindFile(ExtraDirectory, "*.msi", aliases);
+            if (string.IsNullOrEmpty(installer))
+            {
+                logs.Add("Не найдено: " + string.Join("/", aliases));
+                return;
+            }
+
+            ProcessResult result = RunProcess("msiexec.exe", "/i \"" + installer + "\" /qn /norestart", 30 * 60 * 1000);
             logs.Add(Path.GetFileName(installer) + ": exit " + result.ExitCode.ToString(CultureInfo.InvariantCulture));
         }
 
