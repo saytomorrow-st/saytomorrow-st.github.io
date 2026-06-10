@@ -263,7 +263,8 @@ namespace SayTomorrowUtility
             ProcessResult result = HasExtension(installer, ".msi")
                 ? RunProcess("msiexec.exe", "/i \"" + installer + "\" /qn /norestart", 30 * 60 * 1000)
                 : RunProcess(installer, "/S /quiet /norestart", 30 * 60 * 1000);
-            return new AutotuneResult(result.ExitCode == 0, result.ExitCode == 0 ? "Выполнено" : "Ошибка установки", result.Output);
+            bool success = IsInstallerSuccess(result.ExitCode);
+            return new AutotuneResult(success, success ? "Выполнено" : "Ошибка установки", result.Output);
         }
 
         private static AutotuneResult CheckActivation()
@@ -443,10 +444,10 @@ namespace SayTomorrowUtility
             }
 
             string officeStatus = CheckOfficeActivationText(office);
-            if (ContainsAny(officeStatus, "---UNLICENSED---", "UNLICENSED", "NOTIFICATIONS", "не актив", "нелиценз"))
-                return false;
+            if (ContainsAny(officeStatus, "---LICENSED---", "LICENSE STATUS:  LICENSED", "лицензирован", "активирован"))
+                return true;
 
-            return ContainsAny(officeStatus, "---LICENSED---", "LICENSE STATUS:  LICENSED", "лицензирован", "активирован");
+            return false;
         }
 
         private static string FindOfficeSetup()
@@ -535,6 +536,13 @@ namespace SayTomorrowUtility
                 return;
             }
 
+            if (string.Equals(Path.GetFileName(installer), "DXSETUP.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                ProcessResult direct = RunProcess(installer, "/silent", 20 * 60 * 1000);
+                logs.Add("DirectX: exit " + direct.ExitCode.ToString(CultureInfo.InvariantCulture) + (string.IsNullOrEmpty(direct.Output) ? string.Empty : " " + direct.Output));
+                return;
+            }
+
             string extractDir = Path.Combine(Path.GetTempPath(), "saytomorrow_directx_" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(extractDir);
             try
@@ -573,6 +581,11 @@ namespace SayTomorrowUtility
 
             ProcessResult result = RunProcess("msiexec.exe", "/i \"" + installer + "\" /qn /norestart", 30 * 60 * 1000);
             logs.Add(Path.GetFileName(installer) + ": exit " + result.ExitCode.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static bool IsInstallerSuccess(int exitCode)
+        {
+            return exitCode == 0 || exitCode == 3010 || exitCode == 1641;
         }
 
         private static string FindFile(string root, string pattern, params string[] aliases)
